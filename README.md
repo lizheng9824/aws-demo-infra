@@ -10,8 +10,8 @@
 構成:
 
 - `common/` : サービス単位の CloudFormation テンプレートを配置（`network.yaml`, `alb.yaml`, `ecs.yaml`, `dynamodb.yaml`）。
-- `environments/<env>/params.yaml` : 環境ごとのパラメータを定義（`dev`, `staging`, `prod`）。YAML ファイルを必須とします。
-- `environments/deploy.sh` : パッケージングとデプロイを行うスクリプト（`S3_BUCKET` 環境変数が必要、`ENV` 環境変数で環境選択）。
+- `<env>/params.yaml` : 環境ごとのパラメータを定義（`dev`, `staging`, `prod`）。YAML ファイルを必須とします。
+- `deploy.sh` : パッケージングとデプロイを行うスクリプト（`S3_BUCKET` 環境変数が必要、`ENV` 環境変数で環境選択）。
 
 クイックデプロイ手順（例: dev 環境）:
 
