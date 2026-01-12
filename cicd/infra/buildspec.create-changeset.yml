@@ -15,14 +15,15 @@ phases:
       - echo Creating CloudFormation change sets for each template in common/
       - mkdir -p output
       - changes_file=output/changesets.txt
-      - > "$changes_file"
-      - for f in common/*.yaml; do
-          name=$(basename "$f" .yaml);
-          stack_name="${STACK_PREFIX:-aws-demo}-$name";
-          csname="changeset-${CODEBUILD_BUILD_ID}-$name";
+      - printf '' > "$changes_file"
+      - |
+        for f in common/*.yaml; do
+          name=$(basename "$f" .yaml)
+          stack_name="${STACK_PREFIX:-aws-demo}-$name"
+          csname="changeset-${CODEBUILD_BUILD_ID}-$name"
           echo "Creating change set for $stack_name from $f"
-          aws cloudformation create-change-set --stack-name "$stack_name" --change-set-name "$csname" --template-body file://"$f" --capabilities CAPABILITY_NAMED_IAM || true;
-          echo "$stack_name|$csname" >> "$changes_file";
+          aws cloudformation create-change-set --stack-name "$stack_name" --change-set-name "$csname" --template-body file://"$f" --capabilities CAPABILITY_NAMED_IAM || true
+          echo "$stack_name|$csname" >> "$changes_file"
         done
 artifacts:
   files:
