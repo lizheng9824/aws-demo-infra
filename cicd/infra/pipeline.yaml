@@ -1,0 +1,246 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  CodePipeline that uses a GitHub repository (via CodeStar Connection) as
+  source, creates ChangeSets in a build stage, requires manual approval,
+  and executes ChangeSets in a deploy stage.
+
+Parameters:
+  ConnectionArn:
+    Type: String
+    Description: ARN of the CodeStar Connections connection (must be created and authorized for GitHub).
+  FullRepositoryId:
+    Type: String
+    Default: lizheng9824/aws-demo-infra
+    Description: GitHub repository in the form owner/repo
+  BranchName:
+    Type: String
+    Default: develop
+    Description: Branch to use from the GitHub repository
+  GitHubSecretArn:
+    Type: String
+    Default: ""
+    Description: ARN of the Secrets Manager secret containing the GitHub private key (optional)
+  StackNamePrefix:
+    Type: String
+    Default: aws-demo
+    Description: Prefix for created CloudFormation stacks
+
+Conditions:
+  HasGitHubSecret: !Not
+    - !Equals [!Ref GitHubSecretArn, ""]
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: CodeBuildCloudFormationPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteChangeSet
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: "*"
+              # secretsmanager:GetSecretValue is attached via a conditional IAM Policy resource below when a secret ARN is provided
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*
+
+  CodeBuildProjectCreateChangeSet:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${StackNamePrefix}-create-changeset"
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: "cicd/infra/buildspec.create-changeset.yml"
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:6.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables: !If
+          - HasGitHubSecret
+          - - Name: GITHUB_SSH_SECRET_ARN
+              Value: !Ref GitHubSecretArn
+            - Name: SSH_PRIVATE_KEY_PATH
+              Value: /root/.ssh/id_ed25519
+          - []
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+
+  CodeBuildProjectExecuteChangeSet:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${StackNamePrefix}-execute-changeset"
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: "cicd/infra/buildspec.execute-changeset.yml"
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:6.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables: !If
+          - HasGitHubSecret
+          - - Name: GITHUB_SSH_SECRET_ARN
+              Value: !Ref GitHubSecretArn
+            - Name: SSH_PRIVATE_KEY_PATH
+              Value: /root/.ssh/id_ed25519
+          - []
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: CodePipelinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                Resource: !Ref ConnectionArn
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource: !Sub arn:aws:s3:::${ArtifactBucket}/*
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: "*"
+
+  CodeBuildSecretAccessPolicy:
+    Condition: HasGitHubSecret
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: CodeBuildSecretsAccess
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Ref GitHubSecretArn
+      Roles:
+        - !Ref CodeBuildServiceRole
+
+  InfraPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                ConnectionArn: !Ref ConnectionArn
+                FullRepositoryId: !Ref FullRepositoryId
+                BranchName: !Ref BranchName
+                DetectChanges: "true"
+              RunOrder: 1
+
+        - Name: Build
+          Actions:
+            - Name: CreateChangeSets
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ProjectName: !Ref CodeBuildProjectCreateChangeSet
+              RunOrder: 1
+
+        - Name: Approval
+          Actions:
+            - Name: ManualApproval
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: "1"
+              Configuration:
+                CustomData: "Review the CloudFormation change sets created by the Build stage in the CloudFormation console."
+              RunOrder: 1
+
+        - Name: Deploy
+          Actions:
+            - Name: ExecuteChangeSets
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              InputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ProjectName: !Ref CodeBuildProjectExecuteChangeSet
+              RunOrder: 1
+
+Outputs:
+  PipelineName:
+    Value: !Ref InfraPipeline
+    Export:
+      Name: !Sub "${AWS::StackName}-PipelineName"

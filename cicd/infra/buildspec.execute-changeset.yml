@@ -1,0 +1,23 @@
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      python: 3.9
+    commands:
+      - echo Installing awscli helpers
+      - pip install --upgrade pip
+  build:
+    commands:
+      - echo Executing change sets listed in output/changesets.txt
+      - if [ -f output/changesets.txt ]; then
+        while IFS='|' read -r stack cs; do
+        echo "Executing change set $cs for stack $stack";
+        aws cloudformation execute-change-set --change-set-name "$cs" --stack-name "$stack" || true;
+        echo "Waiting for stack operation to complete for $stack";
+        aws cloudformation wait stack-create-complete --stack-name "$stack" || aws cloudformation wait stack-update-complete --stack-name "$stack" || true;
+        done < output/changesets.txt;
+        else
+        echo "No changesets file found; nothing to execute.";
+        fi
+artifacts:
+  files: []
