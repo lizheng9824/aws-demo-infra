@@ -234,7 +234,6 @@ Resources:
                 Provider: CodeBuild
                 Version: "1"
               InputArtifacts:
-                - Name: BuildOutput
                 - Name: SourceOutput
               Configuration:
                 ProjectName: !Ref CodeBuildProjectExecuteChangeSet
